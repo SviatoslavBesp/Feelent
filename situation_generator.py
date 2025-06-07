@@ -1,4 +1,6 @@
 import asyncio
+from dataclasses import asdict
+import json
 from typing import Dict, List, Union
 from openai import AsyncOpenAI
 
@@ -130,4 +132,48 @@ class SituationGenerator:
             output_file="situations_examples.json",
             rewrite_file=False
     ):
-        pass
+        """Generate and optionally save situation examples for a given topic."""
+
+        generator = SensationVectorGenerator(
+            number_of_samples=n_samples,
+            max_active_body_parts=max_active_body_parts,
+            sensation_activation_chance=sensation_activation_chance,
+            seed=seed,
+        )
+        sensations: List[SensationVector] = generator.generate()
+
+        # Convert SensationVector objects to simple dictionaries
+        sensation_dicts = []
+        for s_vec in sensations:
+            vec_dict = asdict(s_vec)
+            vec_dict["physical_state"] = {
+                part.value: asdict(ps) for part, ps in s_vec.physical_state.items()
+            }
+            sensation_dicts.append(vec_dict)
+
+        # Run generation in parallel
+        tasks = [self.generate(topic, sen_dict, n=1) for sen_dict in sensation_dicts]
+        generated = await asyncio.gather(*tasks)
+
+        results = [res[0] if res else None for res in generated]
+
+        examples = [
+            {"theme": topic, "sensations": s, "result": r}
+            for s, r in zip(sensation_dicts, results)
+        ]
+
+        if output_file:
+            try:
+                if rewrite_file:
+                    existing: List = []
+                else:
+                    with open(output_file, "r", encoding="utf-8") as f:
+                        existing = json.load(f)
+            except FileNotFoundError:
+                existing = []
+
+            existing.extend(examples)
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(existing, f, ensure_ascii=False, indent=2)
+
+        return examples
