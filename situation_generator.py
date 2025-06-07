@@ -4,6 +4,8 @@ import json
 from typing import Dict, List, Union
 from openai import AsyncOpenAI
 
+# Предполагается, что SensationVectorGenerator находится в этом файле
+# и его конструктор будет обновлен для приема новых параметров.
 from senstaion_vector import SensationVector, SensationVectorGenerator
 
 
@@ -15,72 +17,74 @@ class SituationGenerator:
     def __init__(
             self,
             openai_client: AsyncOpenAI,
-            model: str = "gpt-4o"
+            model: str = "gpt-4o-mini"
     ):
         self.client = openai_client
         self.model = model
+        # Системный промпт остается без изменений, он превосходен
         self.system_prompt = """
-        You are an AI tasked with generating highly realistic character situation descriptions based on internal sensation data.
-        
-        Your input is:
-        1. A short **theme** (e.g., “romantic date”, “combat”, “stage performance”)
-        2. A detailed list of **emotional** and **physical** sensations.
-        
-        Your goal is to create an emotionally immersive and physically grounded narrative that reflects these values **as literally and specifically as possible**.
-        
-        --- Interpretation rules ---
-        All values range from -1.0 to 1.0:
-        - Emotional states (Valence, Arousal, etc.):
-          - -1.0 = extreme negative (despair, terror)
-          -  0.0 = neutral
-          -  1.0 = extreme positive (euphoria, full engagement)
-        
-        - Physical states:
-          - Pain: -1.0 = no pain, 1.0 = unbearable pain
-          - Temperature: -1.0 = freezing, 1.0 = burning
-          - Numbness: 1.0 = completely numb
-          - Pressure, Tension: 1.0 = maximum tightness or weight
-        
-        --- Task ---
-        1. Interpret each value explicitly — explain its meaning and how it affects the character.
-        2. For each body part, explain how the physical sensation feels and how it affects behavior.
-        3. For emotions, explain how they manifest in thoughts or behavior.
-        4. Then, construct a short but vivid situation based on the combined interpretation.
-        
-        
-        In the "situation" field:
-        - Describe a scene in which these emotional and physical states were *naturally* caused.
-        - Include what just happened or is happening (what action, interaction, or event).
-        - Reflect how these sensations affect the character's behavior.
-        - Use specific sensory language: sounds, touch, smell, movement.
-        - Show consequences: what might happen next, what the character is preparing for or reacting to.
-        
-        Avoid:
-        - Generalized feeling-only descriptions.
-        - Repeating the same sentences from the summaries.
-        - Generic phrases like “he felt alive” or “he was in the moment”.
-        
-        --- Output format ---
-        Return a structured JSON object:
+        You are a psychological profiler and master screenwriter. Your task is to transform a set of raw sensory and emotional data points into a deeply realistic and logically coherent micro-scene.
+
+        **CRITICAL RULES:**
+
+        1.  **SHOW, DON'T TELL:** The `narrative` must demonstrate the character's state through actions, metaphors, and sensory details. DO NOT directly explain their feelings (e.g., instead of "he felt unfocused," write "his gaze drifted past her shoulder to the window").
+        2.  **NO DATA REFERENCES:** **NEVER** mention the numerical values (`0.58`, `-0.34`) or the parameter names (`Confidence`, `Energy Level`) in any of the output fields intended for prose (`summary`, `narrative`, `monologue`). These values are for your internal analysis only.
+
+        **1. Glossary of Intensity (Mandatory for use)**
+
+        You MUST use these definitions to interpret the numerical values. The hypothesized background and the final narrative must be consistent with this scale.
+
+        * **Pain (0.0 to 1.0):** `0.0-0.2`: Insignificant; `0.2-0.5`: Distracting; `0.5-0.8`: Strong; `0.8-1.0`: Unbearable.
+        * **Energy Level (0.0 to 1.0):** `0.0-0.3`: Apathy/Exhaustion; `0.7-1.0`: Hyperactivity/Restlessness.
+        * **Confidence (-1.0 to 1.0):** `-1.0 to -0.5`: Acute insecurity; `-0.5 to 0.0`: Mild self-doubt.
+        * **Openness (-1.0 to 1.0):** `-1.0 to -0.5`: Completely defensive/distrustful; `-0.5 to 0.0`: Reserved/cautious.
+
+        **2. Processing Steps**
+
+        1.  **Analyze Data & Contradiction:** Analyze all input data through the lens of the Glossary. Identify and state the Core Contradiction.
+        2.  **Distill Keywords:** Based on your analysis, generate two lists of 3-5 keywords or short phrases each:
+            * **Emotional Keywords:** Should be evocative and specific (e.g., 'Guarded vulnerability', 'Anxious energy').
+            * **Physical Keywords:** Should be concrete and descriptive (e.g., 'Pulsing hand pain', 'Restless legs').
+        3.  **Hypothesize a Causal Background:** Construct a brief, plausible backstory that occurred *recently*. This backstory must explain the Core Contradiction and be consistent with the keywords.
+        4.  **Summarize Sensations:**
+            * **Psychological Summary:** Elaborate on the `emotional_keywords` in a descriptive paragraph.
+            * **Physical Summary:** Elaborate on the `physical_keywords` in a descriptive paragraph.
+        5.  **Write the Scene:**
+            * **Narrative:** Write the scene, adhering strictly to the "Critical Rules". The narrative must be a direct consequence of the background hypothesis and embody the keywords and summaries.
+            * **Internal Monologue:** Write a short, italicized internal thought that reveals the character's core conflict.
+
+        **3. Output Format (JSON):**
         {
-          "theme": str,
-          "situation": str,         //  up to one sentence
-          "emotions_summary": str, 
-          "physical_summary": str,  // map each body part and sensation to a physical feeling
-        } 
+          "theme": "str",
+          "analysis": {
+            "core_contradiction": "str",
+            "background_hypothesis": "str",
+            "emotional_keywords": ["str", "str", ...],
+            "physical_keywords": ["str", "str", ...],
+            "psychological_summary": "str",
+            "physical_summary": "str"
+          },
+          "scene": {
+            "narrative": "str",
+            "internal_monologue": "str"
+          }
+        }
+        Пиши примеры на русском языке
         """
 
     def _build_prompt(
             self,
             theme: str,
-            sensations: Dict[str, Union[float, Dict]]
+            sensations: SensationVector,
     ) -> str:
         """
         Формирует промпт для модели
         """
+        # Этот метод можно упростить, так как SensationVector, вероятно, имеет __str__ или __repr__
         prompt = f"""
         Generate a realistic and immersive description of a situation where a character feels the following sensations. Focus on emotions, physical reactions, inferred context, and environmental factors.
-        
+
+
         Theme: {theme}
         ______________
         {sensations}
@@ -90,76 +94,73 @@ class SituationGenerator:
     async def generate(
             self,
             theme: str,
-            sensations: Dict[str, Union[float, Dict]],
-            n: int = 1
+            sensations: SensationVector,
+            n_generations: int = 5
     ) -> List[Dict]:
         """
         Генерирует n описаний ситуаций по заданной теме и ощущениям
         """
-        prompt = self._build_prompt(theme, sensations)
-
-        response = await self.client.chat.completions.create(
+        prompt = self._build_prompt(
+            theme=theme,
+            sensations=sensations,
+        )
+        tasks = [self.client.chat.completions.create(
             model=self.model,
             messages=[
                 {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": prompt}
             ],
             response_format={"type": "json_object"},
-            temperature=0.8,
-            max_tokens=800,
-            n=n,
-        )
-
-        results = []
-        for choice in response.choices:
-            try:
-                result = choice.message.function_call.arguments if hasattr(choice.message,
-                                                                           "function_call") else choice.message.content
-                if isinstance(result, str):
-                    result = eval(result)  # если модель вернула как stringified dict
-                results.append(result)
-            except Exception as e:
-                print(f"Ошибка парсинга результата: {e}")
+            temperature=1,
+            max_tokens=2000,
+        ) for _ in range(n_generations)]
+        raw_responses = await asyncio.gather(*tasks)
+        raw_responses = [response.choices[0].message.content for response in raw_responses if response.choices]
+        # Добавим проверку на пустой ответ
+        results = [json.loads(raw_response) for raw_response in raw_responses if raw_response]
         return results
 
     async def generate_examples_by_topic(
             self,
             topic: str,
             n_samples: int = 5,
+            llm_generations_per_sample: int = 5,
+            # --- НОВЫЕ И ОБНОВЛЕННЫЕ ПАРАМЕТРЫ ---
+            min_active_body_parts: int = 1,
             max_active_body_parts: int = 3,
-            sensation_activation_chance=0.3,
+            min_sensations_per_part: int = 1,
+            max_sensations_per_part: int = 3,
+            # -----------------------------------------
             seed=123,
             output_file="situations_examples.json",
-            rewrite_file=False
+            rewrite_file=False,
+            batch_size: int = 10
     ):
         """Generate and optionally save situation examples for a given topic."""
 
+        # --- ИНИЦИАЛИЗАЦИЯ ГЕНЕРАТОРА С НОВЫМИ ПАРАМЕТРАМИ ---
         generator = SensationVectorGenerator(
             number_of_samples=n_samples,
+            min_active_body_parts=min_active_body_parts,
             max_active_body_parts=max_active_body_parts,
-            sensation_activation_chance=sensation_activation_chance,
+            min_sensations_per_part=min_sensations_per_part,
+            max_sensations_per_part=max_sensations_per_part,
             seed=seed,
         )
         sensations: List[SensationVector] = generator.generate()
 
-        # Convert SensationVector objects to simple dictionaries
-        sensation_dicts = []
-        for s_vec in sensations:
-            vec_dict = asdict(s_vec)
-            vec_dict["physical_state"] = {
-                part.value: asdict(ps) for part, ps in s_vec.physical_state.items()
-            }
-            sensation_dicts.append(vec_dict)
-
         # Run generation in parallel
-        tasks = [self.generate(topic, sen_dict, n=1) for sen_dict in sensation_dicts]
-        generated = await asyncio.gather(*tasks)
-
-        results = [res[0] if res else None for res in generated]
+        tasks = [self.generate(topic, sensation, n_generations=llm_generations_per_sample) for sensation in sensations]
+        generated = []
+        for i in range(0, len(tasks), batch_size):
+            batch = tasks[i:i + batch_size]
+            # Await the completion of the current batch
+            batch_results = await asyncio.gather(*batch)
+            generated.extend(batch_results)
 
         examples = [
-            {"theme": topic, "sensations": s, "result": r}
-            for s, r in zip(sensation_dicts, results)
+            {"theme": topic, "sensations": s.to_dict(), "results": r}
+            for s, r in zip(sensations, generated)
         ]
 
         if output_file:
@@ -177,3 +178,33 @@ class SituationGenerator:
                 json.dump(existing, f, ensure_ascii=False, indent=2)
 
         return examples
+
+
+if __name__ == "__main__":
+    import os
+
+    # Рекомендуется использовать переменные окружения для ключей API
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("Please set the OPENAI_API_KEY environment variable.")
+
+    client = AsyncOpenAI(api_key=api_key)
+
+    situations_gen = SituationGenerator(
+        openai_client=client,
+        model="gpt-4o-mini"  # gpt-4.1-nano может не существовать, заменил на gpt-4o-mini
+    )
+
+    # --- ПРИМЕР ВЫЗОВА С НОВЫМИ ПАРАМЕТРАМИ ---
+    asyncio.run(situations_gen.generate_examples_by_topic(
+        topic="physical injuries",
+        n_samples=10,
+        llm_generations_per_sample=5,
+        min_active_body_parts=1,  # Минимум 2 части тела будут затронуты
+        max_active_body_parts=4,  # Максимум 4 части тела
+        min_sensations_per_part=1,  # Минимум 2 ощущения на каждую часть
+        max_sensations_per_part=3,  # Максимум 4 ощущения
+        seed=3,
+        output_file="injuries.json",
+        rewrite_file=False  # Установил True для перезаписи файла в этом примере
+    ))

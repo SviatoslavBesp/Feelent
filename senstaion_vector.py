@@ -102,6 +102,22 @@ class SensationVector:
 
         return sensation + "\n" + physical_sensations
 
+    def to_dict(self) -> Dict:
+        """
+        Convert the sensation vector to a dictionary representation.
+        """
+        return {
+            "valence": self.valence,
+            "arousal": self.arousal,
+            "confidence": self.confidence,
+            "focus": self.focus,
+            "openness": self.openness,
+            "dominance": self.dominance,
+            "energy_level": self.energy_level,
+            "physical_state": {
+                part.value: asdict(sensation) for part, sensation in self.physical_state.items()
+            }
+        }
 
 # --- Updated Generator Class ---
 
