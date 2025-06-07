@@ -130,22 +130,32 @@ class SensationVectorGenerator:
     def __init__(
             self,
             number_of_samples: int,
+            min_active_body_parts: int = 0,
             max_active_body_parts: int = 3,
+            min_sensations_per_part: int = 1,
+            max_sensations_per_part: int = 3,
             sensation_activation_chance: float = 0.3,
             seed: Optional[int] = None
     ):
         """
         Initializes the generator.
         :param number_of_samples: The number of SensationVector objects to generate.
-        :param max_active_body_parts: The maximum number of body parts that can have
+        :param min_active_body_parts: Minimum number of body parts that must have
                                       sensations in a single vector.
-        :param sensation_activation_chance: The probability (0.0 to 1.0) for each
+        :param max_active_body_parts: Maximum number of body parts that can have
+                                      sensations in a single vector.
+        :param min_sensations_per_part: Minimum number of active sensations per body part.
+        :param max_sensations_per_part: Maximum number of active sensations per body part.
+        :param sensation_activation_chance: The base probability (0.0 to 1.0) for each
                                             individual sensation (like pain, temp)
                                             to be active on a body part.
         :param seed: An optional random seed for reproducibility.
         """
         self.number_of_samples = number_of_samples
+        self.min_active_body_parts = min_active_body_parts
         self.max_active_body_parts = max_active_body_parts
+        self.min_sensations_per_part = min_sensations_per_part
+        self.max_sensations_per_part = max_sensations_per_part
         self.sensation_activation_chance = sensation_activation_chance
         self.rng = np.random.default_rng(seed)
 
@@ -155,33 +165,56 @@ class SensationVectorGenerator:
         """
         physical_state: Dict[BodyPartLocalization, BodyPartSensation] = {}
 
-        # Determine how many body parts will be active, up to the specified maximum.
-        # The upper bound for rng.integers is exclusive, so we add 1.
-        number_of_active_parts = self.rng.integers(0, self.max_active_body_parts + 1)
+        all_body_parts = list(BodyPartLocalization)
+        max_parts = min(self.max_active_body_parts, len(all_body_parts))
+        min_parts = min(self.min_active_body_parts, max_parts)
+        if max_parts == 0:
+            return {}
+
+        number_of_active_parts = self.rng.integers(min_parts, max_parts + 1)
 
         if number_of_active_parts == 0:
             return {}
 
-        all_body_parts = list(BodyPartLocalization)
         selected_parts = self.rng.choice(all_body_parts, size=number_of_active_parts, replace=False)
+
+        sensation_fields = [
+            "pain",
+            "temperature",
+            "pressure",
+            "tension",
+            "numbness",
+            "vibration",
+        ]
 
         for part in selected_parts:
             sensation = BodyPartSensation()
 
-            if self.rng.random() < self.sensation_activation_chance:
-                sensation.numbness = self.rng.triangular(left=0.0, mode=0.0, right=1.0)
+            active_fields = [fld for fld in sensation_fields if self.rng.random() < self.sensation_activation_chance]
+
+            remaining_fields = [fld for fld in sensation_fields if fld not in active_fields]
+            while len(active_fields) < self.min_sensations_per_part and remaining_fields:
+                choice = self.rng.choice(remaining_fields)
+                active_fields.append(choice)
+                remaining_fields.remove(choice)
+
+            if len(active_fields) > self.max_sensations_per_part:
+                active_fields = list(self.rng.choice(active_fields, size=self.max_sensations_per_part, replace=False))
+
+            if "numbness" in active_fields:
+                sensation.numbness = self.rng.triangular(0.0, 0.0, 1.0)
 
             max_other_sensation = 1.0 - (sensation.numbness * 0.9)
 
-            if self.rng.random() < self.sensation_activation_chance:
+            if "pain" in active_fields:
                 sensation.pain = self.rng.triangular(0.0, 0.0, max_other_sensation)
-            if self.rng.random() < self.sensation_activation_chance:
+            if "pressure" in active_fields:
                 sensation.pressure = self.rng.triangular(0.0, 0.0, max_other_sensation)
-            if self.rng.random() < self.sensation_activation_chance:
+            if "vibration" in active_fields:
                 sensation.vibration = self.rng.triangular(0.0, 0.0, max_other_sensation)
-            if self.rng.random() < self.sensation_activation_chance:
+            if "tension" in active_fields:
                 sensation.tension = self.rng.triangular(0.0, 0.0, 1.0)
-            if self.rng.random() < self.sensation_activation_chance:
+            if "temperature" in active_fields:
                 sensation.temperature = self.rng.triangular(-1.0, 0.0, 1.0)
 
             if any(val != 0.0 for val in asdict(sensation).values()):
@@ -224,20 +257,19 @@ class SensationVectorGenerator:
 
 
 if __name__ == "__main__":
-    # --- Example Usage of the Updated Generator ---
-
-    # We now set `max_active_body_parts` to 2.
-    # The output will now have at most 2 body parts with sensations per vector.
+    # Example usage for manual testing
     generator = SensationVectorGenerator(
         number_of_samples=10,
-        max_active_body_parts=1,  # <-- New parameter in action
+        max_active_body_parts=1,
         sensation_activation_chance=0.4,
-        seed=123
+        seed=123,
     )
 
     sensation_list = generator.generate()
 
-    print(f"--- Generated {len(sensation_list)} Sensation Vectors (max 2 active body parts) ---\n")
+    print(
+        f"--- Generated {len(sensation_list)} Sensation Vectors (max 1 active body parts) ---\n"
+    )
     for index, vector in enumerate(sensation_list[:5]):
         print(f"--- Vector {index + 1} ---")
         print(vector)
