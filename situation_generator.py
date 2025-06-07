@@ -196,15 +196,17 @@ if __name__ == "__main__":
     )
 
     # --- ПРИМЕР ВЫЗОВА С НОВЫМИ ПАРАМЕТРАМИ ---
-    asyncio.run(situations_gen.generate_examples_by_topic(
-        topic="physical injuries",
-        n_samples=10,
-        llm_generations_per_sample=5,
-        min_active_body_parts=1,  # Минимум 2 части тела будут затронуты
-        max_active_body_parts=4,  # Максимум 4 части тела
-        min_sensations_per_part=1,  # Минимум 2 ощущения на каждую часть
-        max_sensations_per_part=3,  # Максимум 4 ощущения
-        seed=3,
-        output_file="injuries.json",
-        rewrite_file=False  # Установил True для перезаписи файла в этом примере
-    ))
+    asyncio.run(
+        situations_gen.generate_examples_by_topic(
+            topic="physical injuries",
+            n_samples=10,
+            llm_generations_per_sample=5,
+            min_active_body_parts=1,
+            max_active_body_parts=4,
+            min_sensations_per_part=1,
+            max_sensations_per_part=3,
+            seed=3,
+            output_file="injuries.json",
+            rewrite_file=False,
+        )
+    )
