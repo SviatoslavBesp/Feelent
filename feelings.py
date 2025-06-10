@@ -364,6 +364,7 @@ class EmotionalState:
 
 # --- Example Usage ---
 if __name__ == "__main__":
+
     DEFAULT_RELATIONSHIP_MAP: dict[str, dict[str, float]] = {
         "joy": {"sadness": -1.5, "energy_level": 0.5, "trust": 0.2, "pleasure": 1.2},
         "fear": {"physiological_arousal": 1.2, "trembling": 1.5, "trust": -1.2, "sadness": 0.3},
