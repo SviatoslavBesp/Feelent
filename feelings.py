@@ -3,7 +3,8 @@ import math
 import json
 import numpy as np
 from numpy.typing import NDArray
-from typing import Any
+from typing import Any, List, Dict, Tuple
+
 
 class EmotionalState:
     """
@@ -156,6 +157,8 @@ class EmotionalState:
         """
         self.relationship_map: dict[str, dict[str, float]] = relationship_map
         self.ignore_dependencies: bool = ignore_dependencies
+        self._ALL_STATE_KEYS: Tuple[str, ...] = self._EMOTION_KEYS + self._PHYSICAL_SENSATION_KEYS
+
 
         # All "zero" states are initialized with a tiny non-zero value
         # to allow them to be affected by multiplication.
@@ -190,15 +193,34 @@ class EmotionalState:
         """
         return max(0.0, min(1.0, value))
 
+
+    def get_state_deviations(self) -> List[Dict[str, Any]]:
+        deviations_list: List[Dict[str, Any]] = []
+        for key in self._ALL_STATE_KEYS:
+            current_value = getattr(self, f"_{key}")
+            default_value = self._default_state.get(key, 0.0)
+            if not math.isclose(current_value, default_value, abs_tol=self._EPSILON):
+                deviations_list.append({"name": key, "value": current_value, "description": self._ATTRIBUTE_DESCRIPTIONS.get(key, "No description available.")})
+        return deviations_list
+
+    def get_current_state_as_dict(self) -> Dict[str, float]:
+        return {key: getattr(self, f"_{key}") for key in self._ALL_STATE_KEYS}
+
+    def set_current_state_as_default(self) -> None:
+        self._default_state = self.get_current_state_as_dict()
+
+
     def update_state(
             self,
             **kwargs: Any
     ) -> None:
         """
-        Updates one or more state values.
-        If ignore_dependencies is False, it recalculates all dependent values using a multiplicative model.
-        Otherwise, it only sets the specified values.
+        Updates one or more state values using a new averaging model.
+        1. States specified in kwargs are set directly (manual override).
+        2. For all other states, it calculates the average influence from all active triggers.
+        3. The new value is the average of the old value and the calculated influence.
         """
+        # --- Handle the simple case first ---
         if self.ignore_dependencies:
             for key, value in kwargs.items():
                 private_key = f"_{key}"
@@ -206,37 +228,51 @@ class EmotionalState:
                     setattr(self, private_key, self._clamp(value))
             return
 
-        # --- CORRECTED LOGIC ---
-        # Populate original_values ONLY with emotional state attributes, not all internal variables.
-        all_state_keys = self._EMOTION_KEYS + self._PHYSICAL_SENSATION_KEYS
-        original_values = {f"_{key}": getattr(self, f"_{key}") for key in all_state_keys}
+        # --- New Averaging Logic ---
 
-        multipliers = {key: 1.0 for key in original_values.keys()}
+        # Step 1: Store the original state before any calculations.
+        original_state = self.get_current_state_as_dict()
 
-        for key, new_value in kwargs.items():
-            private_key = f"_{key}"
-            if private_key in original_values:
-                old_value = original_values[private_key]
-                safe_old_value = max(old_value, self._EPSILON)
-                change_ratio = new_value / safe_old_value
+        # Step 2: Calculate all influences from the trigger states (kwargs).
+        # We store them in a dictionary where each key maps to a list of influences.
+        influences: Dict[str, List[float]] = {key: [] for key in self._ALL_STATE_KEYS}
 
-                if key in self.relationship_map:
-                    for target_key, weight in self.relationship_map[key].items():
-                        private_target_key = f"_{target_key}"
-                        if private_target_key in multipliers:
-                            effect_multiplier = change_ratio ** weight
-                            multipliers[private_target_key] *= effect_multiplier
+        for trigger_key, trigger_value in kwargs.items():
+            # Check if this trigger has any defined relationships.
+            if trigger_key in self.relationship_map:
+                # Iterate through all target states affected by this trigger.
+                for target_key, coefficient in self.relationship_map[trigger_key].items():
+                    # Calculate the influence this trigger exerts on the target.
+                    influence_value = trigger_value * coefficient
+                    influences[target_key].append(influence_value)
+
+        # Step 3: Iterate through ALL states to calculate their new values.
+        for key in self._ALL_STATE_KEYS:
+            # Check for manual override. If the key was in kwargs, its value is set directly.
+            if key in kwargs:
+                new_value = kwargs[key]
             else:
-                print(f"Warning: Attribute '{key}' not found in EmotionalState.")
+                # If not manually overridden, apply the calculation logic.
+                target_influences = influences[key]
 
-        for private_key, original_value in original_values.items():
-            new_val = original_value * multipliers[private_key]
-            setattr(self, private_key, self._clamp(new_val))
+                # If there are any influences on this state...
+                if target_influences:
+                    # Calculate the average of all influences.
+                    average_influence = sum(target_influences) / len(target_influences)
 
-        for key, value in kwargs.items():
-            private_key = f"_{key}"
-            if private_key in original_values:
-                setattr(self, private_key, self._clamp(value))
+                    # Get the state's original value.
+                    old_value = original_state[key]
+                    if old_value <= 0.1:
+                        old_value = average_influence
+
+                    # Apply the new formula: (old_value + average_influence) / 2
+                    new_value = (old_value + average_influence) / 2
+                else:
+                    # If there were no influences, the value remains unchanged.
+                    new_value = original_state[key]
+
+            # Set the final, clamped value.
+            setattr(self, f"_{key}", self._clamp(new_value))
 
     def to_vector(
             self
@@ -245,10 +281,10 @@ class EmotionalState:
         Returns the character's current state as a NumPy array.
         """
         ordered_keys = self._EMOTION_KEYS + self._PHYSICAL_SENSATION_KEYS
-        vector_list = [getattr(self, f"_{key}") for key in ordered_keys]
+        vector_list = [round(getattr(self, f"_{key}"),2) for key in ordered_keys]
         return np.array(vector_list, dtype=np.float32)
 
-    def get_deviations_with_details(
+    def to_dicts_list(
             self
     ) -> list[dict[str, Any]]:
         """
@@ -262,7 +298,8 @@ class EmotionalState:
             current_value = getattr(self, f"_{key}")
             default_value = self._default_state.get(key, 0.0)
 
-            if not math.isclose(current_value, default_value):
+            # if not math.isclose(current_value, default_value):
+            if not current_value == default_value:
                 deviations_list.append({
                     "name": key,
                     "value": current_value,
@@ -344,6 +381,8 @@ class EmotionalState:
     def pleasure(self) -> float:
         return self._pleasure
 
+
+
     def __str__(self) -> str:
         """Provides a string representation of the current state for easy printing."""
         core_emotions = (
@@ -368,20 +407,21 @@ if __name__ == "__main__":
     DEFAULT_RELATIONSHIP_MAP: dict[str, dict[str, float]] = {
         "joy": {"sadness": -1.5, "energy_level": 0.5, "trust": 0.2, "pleasure": 1.2},
         "fear": {"physiological_arousal": 1.2, "trembling": 1.5, "trust": -1.2, "sadness": 0.3},
-        "pain": {"sadness": 1.2, "energy_level": -1.0, "anger": 0.4, "pleasure": -2.0},
+        "pain": {"sadness": 1.03, "energy_level": -1.0, "anger": 0.4, "pleasure": -2.0},
     }
 
-    npc_character = EmotionalState(relationship_map=DEFAULT_RELATIONSHIP_MAP, ignore_dependencies=True)
+    npc_character = EmotionalState(relationship_map=DEFAULT_RELATIONSHIP_MAP, ignore_dependencies=False)
     print("--- Initial State ---")
     print(npc_character)
 
     print(">>> Setting fear=0.8, joy=0.5")
-    npc_character.update_state(fear=0.8, joy=0.5)
+    npc_character.update_state(pain=0.5)
+
     print("--- Updated State ---")
     print(npc_character)
 
     print("--- Deviations from Default State (Detailed) ---")
-    active_states = npc_character.get_deviations_with_details()
+    active_states = npc_character.to_dicts_list()
 
     # Pretty-print the JSON-like structure for clear output
     print(json.dumps(active_states, indent=2, ensure_ascii=False, default=lambda x: float(f"{x:.4f}")))
