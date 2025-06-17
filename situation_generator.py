@@ -1,212 +1,295 @@
-import asyncio
-from dataclasses import asdict
-import json
-from typing import Dict, List, Union
-from openai import AsyncOpenAI
 
-# Предполагается, что SensationVectorGenerator находится в этом файле
-# и его конструктор будет обновлен для приема новых параметров.
-from senstaion_vector import SensationVector, SensationVectorGenerator
+import unsloth
+from unsloth import FastLanguageModel
 
+import torch
+import torch.nn as nn
+import numpy as np
+from datasets import Dataset
+from typing import Optional, List, Dict, Any
 
-class SituationGenerator:
+from transformers import AutoConfig, TrainingArguments
+from trl import SFTTrainer
+
+# ==============================================================================
+# 1. DEFINITION OF THE CUSTOM MODEL WRAPPER
+# ==============================================================================
+class EmotionUnslothModel(nn.Module):
     """
-    Генератор описаний ситуаций на основе эмоциональных и физических ощущений.
+    An unsloth-optimized wrapper that includes a trainable vector projector.
+    This class takes a raw, fixed-size emotion vector, projects it to the
+    model's hidden dimension, and then injects it into the forward pass.
     """
-
     def __init__(
-            self,
-            openai_client: AsyncOpenAI,
-            model: str = "gpt-4o-mini"
+        self,
+        model_name_or_path: str,
+        raw_emotion_vector_size: int,
+        lora_rank: int = 16,
+        lora_alpha: int = 16,
+        use_4bit: bool = True,
+        max_seq_length: int = 2048,
     ):
-        self.client = openai_client
-        self.model = model
-        # Системный промпт остается без изменений, он превосходен
-        self.system_prompt = """
-        You are a psychological profiler and master screenwriter. Your task is to transform a set of raw sensory and emotional data points into a deeply realistic and logically coherent micro-scene.
-
-        **CRITICAL RULES:**
-
-        1.  **SHOW, DON'T TELL:** The `narrative` must demonstrate the character's state through actions, metaphors, and sensory details. DO NOT directly explain their feelings (e.g., instead of "he felt unfocused," write "his gaze drifted past her shoulder to the window").
-        2.  **NO DATA REFERENCES:** **NEVER** mention the numerical values (`0.58`, `-0.34`) or the parameter names (`Confidence`, `Energy Level`) in any of the output fields intended for prose (`summary`, `narrative`, `monologue`). These values are for your internal analysis only.
-
-        **1. Glossary of Intensity (Mandatory for use)**
-
-        You MUST use these definitions to interpret the numerical values. The hypothesized background and the final narrative must be consistent with this scale.
-
-        * **Pain (0.0 to 1.0):** `0.0-0.2`: Insignificant; `0.2-0.5`: Distracting; `0.5-0.8`: Strong; `0.8-1.0`: Unbearable.
-        * **Energy Level (0.0 to 1.0):** `0.0-0.3`: Apathy/Exhaustion; `0.7-1.0`: Hyperactivity/Restlessness.
-        * **Confidence (-1.0 to 1.0):** `-1.0 to -0.5`: Acute insecurity; `-0.5 to 0.0`: Mild self-doubt.
-        * **Openness (-1.0 to 1.0):** `-1.0 to -0.5`: Completely defensive/distrustful; `-0.5 to 0.0`: Reserved/cautious.
-
-        **2. Processing Steps**
-
-        1.  **Analyze Data & Contradiction:** Analyze all input data through the lens of the Glossary. Identify and state the Core Contradiction.
-        2.  **Distill Keywords:** Based on your analysis, generate two lists of 3-5 keywords or short phrases each:
-            * **Emotional Keywords:** Should be evocative and specific (e.g., 'Guarded vulnerability', 'Anxious energy').
-            * **Physical Keywords:** Should be concrete and descriptive (e.g., 'Pulsing hand pain', 'Restless legs').
-        3.  **Hypothesize a Causal Background:** Construct a brief, plausible backstory that occurred *recently*. This backstory must explain the Core Contradiction and be consistent with the keywords.
-        4.  **Summarize Sensations:**
-            * **Psychological Summary:** Elaborate on the `emotional_keywords` in a descriptive paragraph.
-            * **Physical Summary:** Elaborate on the `physical_keywords` in a descriptive paragraph.
-        5.  **Write the Scene:**
-            * **Narrative:** Write the scene, adhering strictly to the "Critical Rules". The narrative must be a direct consequence of the background hypothesis and embody the keywords and summaries.
-            * **Internal Monologue:** Write a short, italicized internal thought that reveals the character's core conflict.
-
-        **3. Output Format (JSON):**
-        {
-          "theme": "str",
-          "analysis": {
-            "core_contradiction": "str",
-            "background_hypothesis": "str",
-            "emotional_keywords": ["str", "str", ...],
-            "physical_keywords": ["str", "str", ...],
-            "psychological_summary": "str",
-            "physical_summary": "str"
-          },
-          "scene": {
-            "narrative": "str",
-            "internal_monologue": "str"
-          }
-        }
-        Пиши примеры на русском языке
         """
+        Initializes the EmotionUnslothModel with a vector projector.
+        """
+        super().__init__()
 
-    def _build_prompt(
-            self,
-            theme: str,
-            sensations: SensationVector,
-    ) -> str:
-        """
-        Формирует промпт для модели
-        """
-        # Этот метод можно упростить, так как SensationVector, вероятно, имеет __str__ или __repr__
-        prompt = f"""
-        Generate a realistic and immersive description of a situation where a character feels the following sensations. Focus on emotions, physical reactions, inferred context, and environmental factors.
-
-
-        Theme: {theme}
-        ______________
-        {sensations}
-        """
-        return prompt
-
-    async def generate(
-            self,
-            theme: str,
-            sensations: SensationVector,
-            n_generations: int = 5
-    ) -> List[Dict]:
-        """
-        Генерирует n описаний ситуаций по заданной теме и ощущениям
-        """
-        prompt = self._build_prompt(
-            theme=theme,
-            sensations=sensations,
+        # Load unsloth model and tokenizer
+        self.model, self.tokenizer = FastLanguageModel.from_pretrained(
+            model_name=model_name_or_path,
+            max_seq_length=max_seq_length,
+            load_in_4bit=use_4bit,
+            cache_dir="./model_cache",
         )
-        tasks = [self.client.chat.completions.create(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": prompt}
+        model_hidden_size = self.model.config.hidden_size
+
+        # Define the vector projector
+        self.vector_projector = nn.Linear(
+            in_features=raw_emotion_vector_size,
+            out_features=model_hidden_size,
+            bias=False
+        )
+        self.vector_projector.to("cuda",self.model.dtype)
+
+        # Apply LoRA using unsloth's function
+        self.peft_model = FastLanguageModel.get_peft_model(
+            self.model,
+            r=lora_rank,
+            lora_alpha=lora_alpha,
+            lora_dropout=0,
+            bias="none",
+            use_gradient_checkpointing=True,
+            random_state=42,
+            target_modules=[
+                "q_proj", "k_proj", "v_proj", "o_proj",
+                "gate_proj", "up_proj", "down_proj"
             ],
-            response_format={"type": "json_object"},
-            temperature=1,
-            max_tokens=2000,
-        ) for _ in range(n_generations)]
-        raw_responses = await asyncio.gather(*tasks)
-        raw_responses = [response.choices[0].message.content for response in raw_responses if response.choices]
-        # Добавим проверку на пустой ответ
-        results = [json.loads(raw_response) for raw_response in raw_responses if raw_response]
-        return results
-
-    async def generate_examples_by_topic(
-            self,
-            topic: str,
-            n_samples: int = 5,
-            llm_generations_per_sample: int = 5,
-            # --- НОВЫЕ И ОБНОВЛЕННЫЕ ПАРАМЕТРЫ ---
-            min_active_body_parts: int = 1,
-            max_active_body_parts: int = 3,
-            min_sensations_per_part: int = 1,
-            max_sensations_per_part: int = 3,
-            # -----------------------------------------
-            seed=123,
-            output_file="situations_examples.json",
-            rewrite_file=False,
-            batch_size: int = 10
-    ):
-        """Generate and optionally save situation examples for a given topic."""
-
-        # --- ИНИЦИАЛИЗАЦИЯ ГЕНЕРАТОРА С НОВЫМИ ПАРАМЕТРАМИ ---
-        generator = SensationVectorGenerator(
-            number_of_samples=n_samples,
-            min_active_body_parts=min_active_body_parts,
-            max_active_body_parts=max_active_body_parts,
-            min_sensations_per_part=min_sensations_per_part,
-            max_sensations_per_part=max_sensations_per_part,
-            seed=seed,
+            # modules_to_save=["vector_projector"], # <--- УДАЛИТЕ ЭТУ СТРОКУ
         )
-        sensations: List[SensationVector] = generator.generate()
 
-        # Run generation in parallel
-        tasks = [self.generate(topic, sensation, n_generations=llm_generations_per_sample) for sensation in sensations]
-        generated = []
-        for i in range(0, len(tasks), batch_size):
-            batch = tasks[i:i + batch_size]
-            # Await the completion of the current batch
-            batch_results = await asyncio.gather(*batch)
-            generated.extend(batch_results)
+        # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
+        # Manually unfreeze the projector weights after creating the PEFT model.
+        # This makes them trainable without using the restricted 'modules_to_save'.
+        for param in self.vector_projector.parameters():
+            param.requires_grad = True
+        # ---------------------------
 
-        examples = [
-            {"theme": topic, "sensations": s.to_dict(), "results": r}
-            for s, r in zip(sensations, generated)
-        ]
+        self.peft_model.print_trainable_parameters()
 
-        if output_file:
-            try:
-                if rewrite_file:
-                    existing: List = []
-                else:
-                    with open(output_file, "r", encoding="utf-8") as f:
-                        existing = json.load(f)
-            except FileNotFoundError:
-                existing = []
+    def forward(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: torch.Tensor,
+        emotion_vector: torch.Tensor,
+        labels: Optional[torch.LongTensor] = None,
+        **kwargs,
+    ) -> Dict[str, torch.Tensor]:
+        """
+        Performs the forward pass with projection and injection.
+        """
+        projected_vector = self.vector_projector(emotion_vector)
+        embedding_layer = self.peft_model.get_input_embeddings()
+        token_embeddings = embedding_layer(input_ids)
+        combined_embeddings = token_embeddings + projected_vector.unsqueeze(1)
 
-            existing.extend(examples)
-            with open(output_file, "w", encoding="utf-8") as f:
-                json.dump(existing, f, ensure_ascii=False, indent=2)
+        model_outputs = self.peft_model(
+            inputs_embeds=combined_embeddings,
+            attention_mask=attention_mask,
+            labels=labels,
+            return_dict=True
+        )
+        return model_outputs
 
-        return examples
+    def generate(
+        self,
+        input_ids: torch.LongTensor,
+        attention_mask: torch.Tensor,
+        emotion_vector: torch.Tensor,
+        **generation_kwargs: Any
+    ) -> List[int]:
+        """
+        Generates text conditioned on a prompt and an emotion vector.
+        """
+        if "pad_token_id" not in generation_kwargs:
+            generation_kwargs["pad_token_id"] = self.tokenizer.eos_token_id
+
+        return self.peft_model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            emotion_vector=emotion_vector,
+            **generation_kwargs
+        )
+
+# ==============================================================================
+# 2. DEFINITION OF THE CUSTOM DATA COLLATOR
+# ==============================================================================
+
+from transformers import DataCollatorForLanguageModeling
+
+class DataCollatorForEmotionLM(DataCollatorForLanguageModeling):
+    """
+    Custom data collator that handles tokenizing text and stacking emotion vectors.
+    """
+    def __call__(
+        self,
+        features: List[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """
+        Processes a list of features to create a batch.
+        """
+        emotion_vectors = [feature.pop("emotion_vector") for feature in features]
+        batch = super().__call__(features)
+        batch['emotion_vector'] = torch.stack(emotion_vectors)
+        return batch
+
+# ==============================================================================
+# 3. MAIN TRAINING SCRIPT
+# ==============================================================================
+
+def main():
+    # --- Configuration ---
+    MODEL_NAME = "unsloth/Qwen3-0.6B-unsloth-bnb-4bit"
+    MAX_SEQ_LENGTH = 2048
+    RAW_EMOTION_VECTOR_SIZE = 12
+
+    # --- Model Initialization ---
+    print("Initializing the model...")
+    emotion_model_wrapper = EmotionUnslothModel(
+        model_name_or_path=MODEL_NAME,
+        raw_emotion_vector_size=RAW_EMOTION_VECTOR_SIZE,
+        max_seq_length=MAX_SEQ_LENGTH
+    )
+    model_dtype = emotion_model_wrapper.model.dtype
+
+    # --- Data Preparation ---
+    print("Preparing the dataset...")
+    # For Llama-3 instruct model, we should use its specific chat template
+    prompt_template = """<|begin_of_text|><|start_header_id|>user<|end_header_id|>
+
+{}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+{}<|eot_id|>"""
+
+    raw_data = [
+        {"text": prompt_template.format("Write a happy poem about spring.", "The sunbeams dance, a joyful sight,\nNew flowers bloom in colors bright."), "emotion": "happy"},
+        {"text": prompt_template.format("Describe a spooky, abandoned mansion.", "The old manor stood in chilling dread,\nWhere silent ghosts and shadows tread."), "emotion": "spooky"},
+        {"text": prompt_template.format("Compose a short, joyful song about a river.", "The river flows, a happy tune,\nBeneath the sunny afternoon."), "emotion": "happy"},
+        {"text": prompt_template.format("Tell a short, eerie tale about a forest at night.", "Deep in the woods, when moonlight fails,\nA whisper rides on chilling gales."), "emotion": "spooky"},
+    ]
+    dataset = Dataset.from_list(raw_data)
+
+    # Create and map emotion vectors to the dataset
+    emotion_mapping = {
+        "happy": torch.from_numpy(np.random.rand(RAW_EMOTION_VECTOR_SIZE) * 0.1),
+        "spooky": torch.from_numpy(np.random.rand(RAW_EMOTION_VECTOR_SIZE) * -0.1)
+    }
+
+    # CORRECTED: Define the function inside main() to access model_dtype
+    def add_emotion_vector(example: Dict[str, Any]) -> Dict[str, Any]:
+        """Adds the emotion vector to a dataset example with the correct dtype on CPU."""
+        em_vector = emotion_mapping[example["emotion"]]
+        # The tensor should be created with the model's dtype, but remain on the CPU.
+        example["emotion_vector"] = em_vector.to(dtype=model_dtype)
+        return example
+
+    # CORRECTED: Call .map() with only the function argument
+    dataset = dataset.map(add_emotion_vector)
+
+    # --- Pre-processing and Tokenization ---
+    def preprocess_function(example: Dict[str, Any]) -> Dict[str, Any]:
+        """Tokenizes the text and prepares labels."""
+        tokenized_example = emotion_model_wrapper.tokenizer(
+            example["text"],
+            truncation=True,
+            max_length=MAX_SEQ_LENGTH,
+            padding=False,
+            return_tensors=None,
+        )
+        tokenized_example["labels"] = tokenized_example["input_ids"][:]
+        return tokenized_example
+
+    tokenized_dataset = dataset.map(
+        preprocess_function,
+        batched=True,
+        remove_columns=dataset.column_names
+    )
+
+    # --- Trainer Setup ---
+    print("Setting up the trainer...")
+    data_collator = DataCollatorForEmotionLM(
+        tokenizer=emotion_model_wrapper.tokenizer,
+        mlm=False
+    )
+
+    trainer = SFTTrainer(
+        model=emotion_model_wrapper.peft_model,
+        tokenizer=emotion_model_wrapper.tokenizer,
+        train_dataset=tokenized_dataset,
+        data_collator=data_collator,
+        max_seq_length=MAX_SEQ_LENGTH,
+        args=TrainingArguments(
+            per_device_train_batch_size=2,
+            gradient_accumulation_steps=4,
+            warmup_steps=5,
+            max_steps=50,  # Increase for real training
+            learning_rate=2e-4,
+            fp16=not torch.cuda.is_bf16_supported(),
+            bf16=torch.cuda.is_bf16_supported(),
+            logging_steps=1,
+            optim="adamw_8bit",
+            weight_decay=0.01,
+            lr_scheduler_type="linear",
+            seed=42,
+            output_dir="outputs",
+        ),
+    )
+
+    # --- Start Training ---
+    print("Starting training...")
+    trainer.train()
+    print("Training finished!")
+
+      # --- Inference Example ---
+
+    print("\n--- Пример генерации текста (инференс) ---")
+
+    inference_prompt = "Tell me about a sunny day."
+    inference_emotion = "happy"
+
+
+    formatted_prompt = prompt_template.format(inference_prompt, "")
+    inputs = emotion_model_wrapper.tokenizer(formatted_prompt, return_tensors="pt").to("cuda")
+
+    # Manually prepare `inputs_embeds` for inference
+    # 1. Get the emotion vector and project it
+    emotion_vector_tensor = emotion_mapping[inference_emotion].unsqueeze(0).to("cuda",dtype=model_dtype)
+    projected_vector = emotion_model_wrapper.vector_projector(emotion_vector_tensor)
+
+    # 2. Get the token embeddings from the input_ids
+    embedding_layer = emotion_model_wrapper.peft_model.get_input_embeddings()
+    token_embeddings = embedding_layer(inputs.input_ids)
+
+    # 3. Combine them to create final inputs_embeds
+    combined_embeddings = token_embeddings + projected_vector.unsqueeze(1)
+
+    # Call generate with `inputs_embeds` instead of `input_ids`.
+    generated_ids = emotion_model_wrapper.peft_model.generate(
+        inputs_embeds=combined_embeddings,
+        attention_mask=inputs.attention_mask,
+        max_new_tokens=50,
+        use_cache=True,
+        do_sample=True,
+        top_p=0.9,
+        temperature=0.7,
+        pad_token_id=emotion_model_wrapper.tokenizer.eos_token_id,
+    )
+
+    generated_text = emotion_model_wrapper.tokenizer.decode(generated_ids[0], skip_special_tokens=True)
+    print("\n--- Сгенерированный текст ---")
+    print(generated_text)
+
 
 
 if __name__ == "__main__":
-    import os
-
-    # Рекомендуется использовать переменные окружения для ключей API
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise ValueError("Please set the OPENAI_API_KEY environment variable.")
-
-    client = AsyncOpenAI(api_key=api_key)
-
-    situations_gen = SituationGenerator(
-        openai_client=client,
-        model="gpt-4o-mini"  # gpt-4.1-nano может не существовать, заменил на gpt-4o-mini
-    )
-
-    # --- ПРИМЕР ВЫЗОВА С НОВЫМИ ПАРАМЕТРАМИ ---
-    asyncio.run(
-        situations_gen.generate_examples_by_topic(
-            topic="physical injuries",
-            n_samples=10,
-            llm_generations_per_sample=5,
-            min_active_body_parts=1,
-            max_active_body_parts=4,
-            min_sensations_per_part=1,
-            max_sensations_per_part=3,
-            seed=3,
-            output_file="injuries.json",
-            rewrite_file=False,
-        )
-    )
+    # Run the main function to start the training and inference process
+    main()
