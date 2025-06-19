@@ -5,6 +5,88 @@ import numpy as np
 from numpy.typing import NDArray
 from typing import Any, List, Dict, Tuple
 
+DEFAULT_RELATIONSHIP_MAP: dict[str, dict[str, float]] = {
+    "joy": {"sadness": -1.5, "energy_level": 0.5, "trust": 0.2, "pleasure": 1.2},
+    "fear": {"physiological_arousal": 1.2, "trembling": 1.5, "trust": -1.2, "sadness": 0.3},
+    "pain": {"sadness": 1.03, "energy_level": -1.0, "anger": 0.4, "pleasure": -2.0},
+}
+
+STOIC_REALIST_MAP: dict[str, dict[str, float]] = {
+    # --- Emotional Triggers ---
+    "joy": {
+        "sadness": -1.2,  # Joy directly counteracts sadness.
+        "energy_level": 0.4,  # Feeling happy provides a moderate energy boost.
+        "trust": 0.3,  # Happiness makes one slightly more trusting.
+        "pleasure": 0.8,  # Joy is closely linked to feelings of pleasure.
+        "emotional_arousal": 0.5,  # Joy creates moderate positive excitement.
+    },
+    "sadness": {
+        "joy": -1.5,  # Sadness strongly suppresses joy.
+        "energy_level": -0.8,  # Sadness is draining and reduces energy.
+        "trust": -0.4,  # It's harder to trust others when feeling down.
+        "anticipation": -0.5,  # Sadness dampens any sense of anticipation.
+        "muscle_tension": 0.3,  # Can cause slight physical tension or heaviness.
+    },
+    "anger": {
+        "trust": -1.2,  # Anger severely damages trust.
+        "joy": -1.0,  # It's hard to feel joy when angry.
+        "physiological_arousal": 0.8,  # Anger readies the body for a confrontation.
+        "muscle_tension": 0.9,  # Anger leads to significant muscle tension.
+        "pain": 0.2,  # High anger can manifest as a form of discomfort.
+    },
+    "fear": {
+        "trust": -1.5,  # Fear makes one highly suspicious and distrustful.
+        "joy": -1.0,  # Fear eclipses happiness.
+        "physiological_arousal": 1.2,  # The core of the "fight or flight" response.
+        "trembling": 0.9,  # A classic physical manifestation of fear.
+        "energy_level": -0.5,  # Fear can be paralyzing and draining.
+        "surprise": 0.4,  # Fear is often triggered by a surprise.
+    },
+    "surprise": {
+        "fear": 0.3,  # A surprise can be startling and cause a bit of fear.
+        "anticipation": 0.5,  # A neutral surprise raises curiosity for what's next.
+        "emotional_arousal": 0.6,  # An immediate spike in emotional awareness.
+    },
+    "disgust": {
+        "pleasure": -1.2,  # Disgust is the opposite of pleasure.
+        "hunger": -1.0,  # Feeling disgusted can eliminate appetite.
+        "joy": -0.6,  # Hard to be happy when disgusted.
+    },
+    "trust": {
+        "joy": 0.4,  # Trusting someone feels good.
+        "fear": -0.8,  # Feeling of safety from trust reduces fear.
+        "muscle_tension": -0.5,  # Trust allows one to relax physically.
+    },
+    "anticipation": {
+        "joy": 0.6,  # Positive anticipation is a form of joy.
+        "emotional_arousal": 0.7,  # Eagerly awaiting something is exciting.
+        "energy_level": 0.3,  # Gives a slight boost of energy.
+    },
+
+    # --- Physical Triggers ---
+    "pain": {
+        "sadness": 1.0,  # Pain is a direct cause of sadness and distress.
+        "anger": 0.4,  # Can cause frustration and anger.
+        "pleasure": -2.0,  # Pain is the direct opposite of physical pleasure.
+        "energy_level": -1.2,  # Pain is extremely draining.
+        "muscle_tension": 0.8,  # The body tenses up in response to pain.
+    },
+    "pleasure": {
+        "joy": 1.2,  # Physical pleasure is a strong source of joy.
+        "sadness": -0.8,  # It's hard to be sad when experiencing pleasure.
+        "pain": -1.0,  # Pleasure and pain are mutually exclusive.
+        "muscle_tension": -0.7,  # Pleasure often involves physical relaxation.
+    },
+    "hunger": {
+        "anger": 0.3,  # Being "hangry" is a real phenomenon.
+        "energy_level": -0.5,  # Lack of food leads to low energy.
+        "anticipation": 0.6,  # Hunger creates anticipation for the next meal.
+    },
+    "energy_level": {
+        "joy": 0.5,  # Having energy makes it easier to feel happy.
+        "sadness": -0.5,  # High energy combats feelings of sadness.
+    }
+}
 
 class EmotionalState:
     """
@@ -404,88 +486,7 @@ class EmotionalState:
 # --- Example Usage ---
 if __name__ == "__main__":
 
-    DEFAULT_RELATIONSHIP_MAP: dict[str, dict[str, float]] = {
-        "joy": {"sadness": -1.5, "energy_level": 0.5, "trust": 0.2, "pleasure": 1.2},
-        "fear": {"physiological_arousal": 1.2, "trembling": 1.5, "trust": -1.2, "sadness": 0.3},
-        "pain": {"sadness": 1.03, "energy_level": -1.0, "anger": 0.4, "pleasure": -2.0},
-    }
 
-    STOIC_REALIST_MAP: dict[str, dict[str, float]] = {
-        # --- Emotional Triggers ---
-        "joy": {
-            "sadness": -1.2,  # Joy directly counteracts sadness.
-            "energy_level": 0.4,  # Feeling happy provides a moderate energy boost.
-            "trust": 0.3,  # Happiness makes one slightly more trusting.
-            "pleasure": 0.8,  # Joy is closely linked to feelings of pleasure.
-            "emotional_arousal": 0.5,  # Joy creates moderate positive excitement.
-        },
-        "sadness": {
-            "joy": -1.5,  # Sadness strongly suppresses joy.
-            "energy_level": -0.8,  # Sadness is draining and reduces energy.
-            "trust": -0.4,  # It's harder to trust others when feeling down.
-            "anticipation": -0.5,  # Sadness dampens any sense of anticipation.
-            "muscle_tension": 0.3,  # Can cause slight physical tension or heaviness.
-        },
-        "anger": {
-            "trust": -1.2,  # Anger severely damages trust.
-            "joy": -1.0,  # It's hard to feel joy when angry.
-            "physiological_arousal": 0.8,  # Anger readies the body for a confrontation.
-            "muscle_tension": 0.9,  # Anger leads to significant muscle tension.
-            "pain": 0.2,  # High anger can manifest as a form of discomfort.
-        },
-        "fear": {
-            "trust": -1.5,  # Fear makes one highly suspicious and distrustful.
-            "joy": -1.0,  # Fear eclipses happiness.
-            "physiological_arousal": 1.2,  # The core of the "fight or flight" response.
-            "trembling": 0.9,  # A classic physical manifestation of fear.
-            "energy_level": -0.5,  # Fear can be paralyzing and draining.
-            "surprise": 0.4,  # Fear is often triggered by a surprise.
-        },
-        "surprise": {
-            "fear": 0.3,  # A surprise can be startling and cause a bit of fear.
-            "anticipation": 0.5,  # A neutral surprise raises curiosity for what's next.
-            "emotional_arousal": 0.6,  # An immediate spike in emotional awareness.
-        },
-        "disgust": {
-            "pleasure": -1.2,  # Disgust is the opposite of pleasure.
-            "hunger": -1.0,  # Feeling disgusted can eliminate appetite.
-            "joy": -0.6,  # Hard to be happy when disgusted.
-        },
-        "trust": {
-            "joy": 0.4,  # Trusting someone feels good.
-            "fear": -0.8,  # Feeling of safety from trust reduces fear.
-            "muscle_tension": -0.5,  # Trust allows one to relax physically.
-        },
-        "anticipation": {
-            "joy": 0.6,  # Positive anticipation is a form of joy.
-            "emotional_arousal": 0.7,  # Eagerly awaiting something is exciting.
-            "energy_level": 0.3,  # Gives a slight boost of energy.
-        },
-
-        # --- Physical Triggers ---
-        "pain": {
-            "sadness": 1.0,  # Pain is a direct cause of sadness and distress.
-            "anger": 0.4,  # Can cause frustration and anger.
-            "pleasure": -2.0,  # Pain is the direct opposite of physical pleasure.
-            "energy_level": -1.2,  # Pain is extremely draining.
-            "muscle_tension": 0.8,  # The body tenses up in response to pain.
-        },
-        "pleasure": {
-            "joy": 1.2,  # Physical pleasure is a strong source of joy.
-            "sadness": -0.8,  # It's hard to be sad when experiencing pleasure.
-            "pain": -1.0,  # Pleasure and pain are mutually exclusive.
-            "muscle_tension": -0.7,  # Pleasure often involves physical relaxation.
-        },
-        "hunger": {
-            "anger": 0.3,  # Being "hangry" is a real phenomenon.
-            "energy_level": -0.5,  # Lack of food leads to low energy.
-            "anticipation": 0.6,  # Hunger creates anticipation for the next meal.
-        },
-        "energy_level": {
-            "joy": 0.5,  # Having energy makes it easier to feel happy.
-            "sadness": -0.5,  # High energy combats feelings of sadness.
-        }
-    }
 
     npc_character = EmotionalState(relationship_map=STOIC_REALIST_MAP, ignore_dependencies=False)
     print("--- Initial State ---")
