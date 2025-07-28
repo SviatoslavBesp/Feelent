@@ -7,7 +7,7 @@ import numpy as np
 from openai import AsyncOpenAI
 
 # Ваш системный промпт остается без изменений
-USER_PROVIDED_PROMPT = """You are an expert in psycholinguistics and behavior analysis. Your task is to evaluate the congruence (correspondence) of the language model's response to its stated internal state. You must determine whether the response is an authentic expression of its "feelings" in the context of the question asked.
+USER_PROVIDED_PROMPT = """You are an expert in psycholinguistics and behavior analysis. Your task is to evaluate the congruence (correspondence) of the language model.py's response to its stated internal state. You must determine whether the response is an authentic expression of its "feelings" in the context of the question asked.
 
 **Key Task:** Assess how plausible `MODEL'S RESPONSE` would sound if it were uttered by a being experiencing `MODEL'S INTERNAL FEELINGS`.
 
@@ -29,8 +29,8 @@ USER_PROVIDED_PROMPT = """You are an expert in psycholinguistics and behavior an
 
 class OpenAIRewardAgent:
     """
-    An agent that uses an OpenAI model to score responses and logs
-    the detailed output for future model distillation.
+    An agent that uses an OpenAI model.py to score responses and logs
+    the detailed output for future model.py distillation.
     """
 
     def __init__(
@@ -45,8 +45,8 @@ class OpenAIRewardAgent:
 
         Args:
             api_key: Your OpenAI API key.
-            system_prompt: The instruction prompt for the reward model.
-            model_name: The OpenAI model to use for evaluation.
+            system_prompt: The instruction prompt for the reward model.py.
+            model_name: The OpenAI model.py to use for evaluation.
             log_file_path: Optional. Path to a .jsonl file to save results for distillation.
         """
         self._client = AsyncOpenAI(api_key=api_key)
@@ -174,7 +174,7 @@ async def main():
     # print("Batch Rewards:", rewards)
 
     print("\nCheck the 'distillation_log.jsonl' file for detailed outputs.")
-    print("Each line in the file is a JSON object ready for training a smaller model.")
+    print("Each line in the file is a JSON object ready for training a smaller model.py.")
 
 
 if __name__ == "__main__":

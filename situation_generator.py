@@ -18,7 +18,7 @@ class EmotionUnslothModel(nn.Module):
     """
     An unsloth-optimized wrapper that includes a trainable vector projector.
     This class takes a raw, fixed-size emotion vector, projects it to the
-    model's hidden dimension, and then injects it into the forward pass.
+    model.py's hidden dimension, and then injects it into the forward pass.
     """
     def __init__(
         self,
@@ -34,7 +34,7 @@ class EmotionUnslothModel(nn.Module):
         """
         super().__init__()
 
-        # Load unsloth model and tokenizer
+        # Load unsloth model.py and tokenizer
         self.model, self.tokenizer = FastLanguageModel.from_pretrained(
             model_name=model_name_or_path,
             max_seq_length=max_seq_length,
@@ -68,7 +68,7 @@ class EmotionUnslothModel(nn.Module):
         )
 
         # --- ДОБАВЬТЕ ЭТОТ БЛОК ---
-        # Manually unfreeze the projector weights after creating the PEFT model.
+        # Manually unfreeze the projector weights after creating the PEFT model.py.
         # This makes them trainable without using the restricted 'modules_to_save'.
         for param in self.vector_projector.parameters():
             param.requires_grad = True
@@ -153,7 +153,7 @@ def main():
     RAW_EMOTION_VECTOR_SIZE = 12
 
     # --- Model Initialization ---
-    print("Initializing the model...")
+    print("Initializing the model.py...")
     emotion_model_wrapper = EmotionUnslothModel(
         model_name_or_path=MODEL_NAME,
         raw_emotion_vector_size=RAW_EMOTION_VECTOR_SIZE,
@@ -163,7 +163,7 @@ def main():
 
     # --- Data Preparation ---
     print("Preparing the dataset...")
-    # For Llama-3 instruct model, we should use its specific chat template
+    # For Llama-3 instruct model.py, we should use its specific chat template
     prompt_template = """<|begin_of_text|><|start_header_id|>user<|end_header_id|>
 
 {}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
@@ -188,7 +188,7 @@ def main():
     def add_emotion_vector(example: Dict[str, Any]) -> Dict[str, Any]:
         """Adds the emotion vector to a dataset example with the correct dtype on CPU."""
         em_vector = emotion_mapping[example["emotion"]]
-        # The tensor should be created with the model's dtype, but remain on the CPU.
+        # The tensor should be created with the model.py's dtype, but remain on the CPU.
         example["emotion_vector"] = em_vector.to(dtype=model_dtype)
         return example
 
